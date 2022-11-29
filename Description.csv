@@ -1,0 +1,18 @@
+﻿Feature Name,Type,Description,Values
+Race,Categorical,The race of the patient,"Caucasian, Asian, African American, Hispanic, and other"
+Gender,Categorical,The biological sex the patient,Male and Female
+Age,Categorical,The age of the patient,"[0, 10), [10, 20), . . ., [90, 100)"
+Admission_Type,Categorical,Admission Type is used to classify how the patient came to the hospital,"Emergency, Trauma Center, Urgent, Elective, and Newborn"
+Discharge_Disposition,Categorical,The patient's anticipated location or status following the encounter,"DischargeToHome, DischargeToFacilityWithCare, and Other"
+Admission_Source,Categorical,The source of admission to a hospital,"Transfer, Referral, Birth, and Other"
+Primary_Diag,Categorical,The main condition treated or investigated during the relevant episode of healthcare,"Circulatory, Respiratory, Digestive, Diabetes, Injury, Musculoskeletal, Genitourinary, Neoplasms, and Other"
+Max_Glu_Serum,Categorical,Indicates the range of the blood glucose level at the time of of hospital admission,""">200"" (between 200-300), "">300"" (greater than 300), ""Normal"" (less than 140), and ""None"" (not measured)"
+A1Cresult,Categorical,The measurement of Hemoglobin A1c (an important measure of glucose control) at the time of hospital admission,""">8"" (greater than 8%), "">7"" (between 7% to 8%), ""Normal"" (under 7%), and ""None"" (not measured) "
+Med_Change,Categorical,Indicates if there was a change in diabetic medications (either dosage or brand),Yes or No
+Diabetes_Med_Prescribed,Categorical,Indicates if there was any diabetic medication prescribed,Yes or No
+Readmitted,Categorical,Indicates if the patient was readmitted within 30 days of discharge,Yes or No
+Time_In_Hospital,Numeric,Integer number of days between admission and discharge,Integer
+Num_Medications,Numeric,Number of distinct generic names administered during the encounter,Integer
+Number_Diagnoses,Numeric,Number of diagnoses entered to the system,Integer
+Num_Procedures_Total,Numeric,Number of total procedures (lab tests and other) performed during the encounter,Integer
+Num_Visit_Previous_Year,Numeric,"Number of total visits (outpatient, emergency, and inpatient) of the patient in the year preceding the encounter",Integer

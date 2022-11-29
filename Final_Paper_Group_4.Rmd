@@ -1,0 +1,619 @@
+---
+title: "Final Paper"
+author: "STOR 320.01 Group 4"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(kableExtra)
+library(knitr)
+library(plyr)
+library(formattable)
+library(ggpubr)
+library(leaps) 
+library(Stat2Data)
+library(Rcpp) 
+library(readr)
+library(olsrr)
+library(purrr)
+library(broom) 
+library(modelr)
+library(car)
+library(glmnet)
+library(ggiraph)
+library(Metrics)
+
+library(ggiraphExtra)
+source("https://raw.githubusercontent.com/JA-McLean/STOR455/master/scripts/ShowSubsets.R")
+source("https://raw.githubusercontent.com/JA-McLean/STOR455/master/scripts/anova455.R")
+
+```
+
+# INTRODUCTION
+
+Our health care system is characterized by high and rising healthcare costs as well as gaps in quality, safety, equity, and access. The length of stay in hospitals is often used as an indicator of the efficiency of care and hospital performance. It is generally recognized that a shorter stay indicates less resource consumption per discharge, and the ability to predict the length of stay as an initial assessment of patients’ risk is critical for better resource planning and allocation. Another hospital performance indicator is hospital readmission. Hospital readmission is a high-priority health care quality measurement and target for cost reduction. Despite broad interest in readmission, relatively little research has focused on patients with diabetes. The burden of diabetes among hospitalized patients is substantial, growing, and costly, and readmissions contribute a significant portion of this burden. Reducing readmission rates and length of stay in hospitals of diabetic patients has the potential to greatly reduce health care costs while simultaneously improving care. 
+
+The first question Group 4 explored is “Can we construct a linear regression model to predict the length of stay in hospital using a combination of the variables in our data set?” The purpose of this question is to predict the length of stay in hospitals as an initial assessment of patients’ risk so that hospital management teams can have higher flexibility in hospital bed use and better assessment in the cost-effectiveness treatment. We envisioned our model to be most helpful for bed managers to foresee any bottlenecks in bed availability when admitting patients to avoid unnecessary bed transfer between wards.
+
+The second question Group 4 investigated is “Can we construct a logistic regression model to predict the risk of getting readmitted using a combination of the variables in our data set?” By exploring the relationship between hospital readmissions and other variables in our data set, we strive to understand the risk factors that lead to hospital readmissions within 30 days of discharge. We would like to construct and compare different models to optimize prediction performances so that hospitals can design well-targeted early interventional programs to reduce readmission risks, such as inpatient education, specialty care, better discharge instructions, coordination of care, and post-discharge support. 
+
+# DATA
+
+We found this dataset on Kaggle. A user named “Humberto Brandão” uploaded it to Kaggle four years ago. The dataset is created by researchers at the Virginia Commonwealth University by pulling data from the Health Facts database, a national data warehouse that collects comprehensive clinical records across 130 hospitals in the United States from 1999 to 2008. The dataset has been used by the same group of researchers to explore the impact of HbA1c measurement on hospital readmission rates, but there are still many variables left untouched in their analysis, among which we chose to investigate. By removing the NA’s and missing values, we constructed our final cleaned data set, which contains 19 features in total (including patient number) along with 57,222 observations. 
+
+We used almost every feature in the dataset except for patient number (`Patient_Nbr`) and total hospital visits (`Number_Of_Visits_Total`). Patient number is just a unique identifier for all the patients in the dataset, so the number itself doesn’t give us any information. Total hospital visits measures the total number of times a patient visited the hospital from 1999 to 2008. Since we only want to predict the most recent and immediate readmission risk, we focus on the binary variable “Readmitted” and dropped total hospital visits in our final model. After our modification, the final clean dataset that we utilized for further analysis contains 17 variables and 57,222 observations. The table below is a preview of our final dataset.
+
+```{r, echo=F}
+Hospital=read.csv("Hospital.Cleaned.csv")
+Hospital.select=Hospital%>%
+  select(-c(Patient_Nbr,Number_Of_Visits_Total))
+Hospital.t=as.data.frame(head(Hospital.select,10))
+kable(Hospital.t)%>%
+    kable_classic(full_width = T, html_font = "Cambria")%>%
+    kable_styling(fixed_thead = T, bootstrap_options = c("striped", "hover", "condensed"))%>%
+    row_spec(0, bold=T)%>%
+    row_spec(0, italic=T)%>%
+    row_spec(0, background = "orange")%>%
+    scroll_box(width = "100%", height = "350px")
+```
+
+
+
+Since we are predicting the length of stay in hospitals (`Time_In_Hospital`) and whether a patient is readmitted (`Readmitted`), we created the following two frequency plot to visualize the distribution of the data.
+
+
+```{r, echo=F}
+sum1=count(Hospital.select, "Time_In_Hospital")
+sum2=count(Hospital.select, "Readmitted")
+
+Time_In_Hospital=ggplot(data=sum1, mapping=aes(x=Time_In_Hospital, y=freq))+
+  geom_bar(stat='identity', fill="lightblue")+
+  ylab("Frequency")+
+  ggtitle("\n Frequency Plot of Length of Stay in Hospital \n")+
+  coord_flip()+
+  theme_classic()
+Readmitted=ggplot(data=sum2, mapping=aes(x=Readmitted, y=freq))+
+  geom_bar(stat='identity', fill="orange")+
+  ylab("Frequency")+
+  ggtitle("\n Frequency Plot of Readmitted \n")+
+  coord_flip()+
+  theme_classic()
+
+figure = ggarrange(Time_In_Hospital,Readmitted,
+                    ncol = 1, nrow = 2)
+figure
+```
+
+
+To provide more information on what each variable stands for in a real-world context, we created the following table that contains the name of the variable, the variable type, a short description of the variable, and a summary of the values that it can take.
+
+
+```{r, echo=F}
+Description=read.csv("Description.csv")
+kable(Description)%>%
+    kable_classic(full_width = T, html_font = "Cambria")%>%
+    kable_styling(fixed_thead = T, bootstrap_options = c("striped", "hover", "condensed"))%>%
+    row_spec(0, bold=T)%>%
+    row_spec(0, italic=T)%>%
+    row_spec(0, background = "lightblue")%>%
+    scroll_box(width = "100%", height = "350px")
+```
+
+
+
+In our initial analysis, we found out an interesting relationship between `Time_In_Hospital` (the length of stay in hospital) and `Readmitted` (whether the patient is readmitted). From the relative frequency plot below, It's clear that compared to patients who got readmitted, patients who did not get readmitted tend to spend less time in the hospital. Specifically, for patients who did not get readmitted, 64% of them spent less than or equal to 4 days in the hospital. However, for readmitted patients, only 56% of them spent less than or equal to 4 days in the hospital. The side-by-side relative frequency plot demonstrates the interesting relationship between the two variables of interest.  
+
+
+```{r, echo=F}
+Hospital_NoReadmit = Hospital %>%
+  filter(Readmitted=="No")
+Hospital_Readmit = Hospital %>%
+  filter(Readmitted=="Yes")
+
+
+Hospital_readmitted_mod = Hospital_Readmit %>% 
+  count("Time_In_Hospital") 
+Hospital_readmitted_mod=mutate(Hospital_readmitted_mod, perc = freq / 4939)
+Hospital_readmitted_mod=mutate(Hospital_readmitted_mod, Readmitted = "Yes")
+
+Hospital_noreadmitted_mod = Hospital_NoReadmit %>% 
+  count("Time_In_Hospital") 
+Hospital_noreadmitted_mod=mutate(Hospital_noreadmitted_mod, perc = freq / 52283)
+Hospital_noreadmitted_mod=mutate(Hospital_noreadmitted_mod, Readmitted = "No")
+
+hospital.bind=rbind(Hospital_readmitted_mod,Hospital_noreadmitted_mod)
+
+ggplot(data=hospital.bind, aes(x=Time_In_Hospital, y=perc, fill=Readmitted))+
+  geom_bar(stat = "identity", position = position_dodge())+
+  xlab("Length of Stay in Hospital")+
+  ylab("Percentage")+
+  ggtitle("\n Length of Stay in Hospital and Readmission \n")+
+  geom_text(aes(label = round(perc,2)), vjust = 1.5,
+             position = position_dodge(.9), size = 2) 
+```
+
+# RESULTS
+
+#### Q1: Can we construct a linear regression model to predict the length of stay in hospital using a combination of the variables in our data set?
+
+```{r, include=FALSE}
+set.seed(215)
+TEST.LOCATIONS=sample(x=unique(Hospital$Patient_Nbr),size=3,replace=F)
+
+TEST = anti_join(Hospital,tibble(Patient_Nbr=TEST.LOCATIONS),by="Patient_Nbr")
+ 
+
+cleanedN=TEST
+
+mod1<-lm(Time_In_Hospital~Num_Medications+Num_Procedures_Total+Number_Diagnoses,data=cleanedN) 
+numeric_grid <- cleanedN %>% 
+  data_grid( 
+    Num_Medications=seq_range(Num_Medications,16), 
+    Number_Diagnoses=seq_range(Number_Diagnoses,16),
+    Num_Procedures_Total=seq_range(Num_Procedures_Total,16)) %>% 
+  gather_predictions(mod1)
+numeric_grid
+
+```
+  
+
+In order to attempt to answer the second question, “How can we most accurately predict the length of stay in the hospital for a patient?” We first had to exclude certain variables that were not a good fit for the model. Many variables were excluded from this prediction due to the complications of medical variables. Some of these complications included the broadness of certain variables that, if added, would not help predict the length of stay in a hospital due to extreme outliers they produced. Secondly, we split our data through random sampling into train sets, which composed 80% of the data, and test sets, which composed the latter 20% of the data. Lastly, with all the variables that were left remaining, we constructed a linear model that best predicted the length of stay in a hospital.    
+
+
+```{r echo=FALSE,message=FALSE, warning=F}
+compare=tribble( 
+  ~"",~med_linmod,~proc_linmod,~diag_linmod,
+  "MAE",1.970802,2.115576,2.205688) 
+library(kableExtra)  
+kable(compare)%>%
+  kable_classic(full_width = F, html_font = "Cambria")
+```
+
+This above table shows the three best mean absolute errors(MAE) that we calculated after running the equation for all of our variables. 
+
+
+
+```{r  echo=FALSE, results='hide',message=FALSE}
+par(mfrow=c(2,2))
+plot(mod1)
+```
+
+
+As you can see from the above linear regression plots, linearity seems to hold well as the red line sits close the black dashed line in the `Residuals vs Fitted` plot. From reading the `Normal Q-Q` graph we can tell that values in the later quantiles have more frequent outliers compared to values in the earlier quantiles that seem to be more normally distributed.This means that our model tends to be more right-skewed distributed. Finally, from reading the `Residuals vs Leverage` plot we can tell that all of our leverage points are below .5. This shows that none of the observed points will not have a great enough of impact to skew the data severely. From analyzing the above plots, we feel confident that our linear model will do a good job in predicting the length of stay for patients in the hospital.  
+
+### Y=-0.4567879+0.1337588M+0.0321897P+0.1630594D 
+
+      M= Number of Medications 
+      P= Number of Total Procedures 
+      D= Number of Diagnoses
+
+This above equation shows numerical representation of our model predicting the time in hospital for a given patient. This equation gives us the intercept(-0.4567879) of our linear model along with the given slopes for each predictor variable that we chose. 
+
+```{r  echo=FALSE, results='hide',message=FALSE}
+ggplot() + 
+  geom_point(data=cleanedN,mapping=aes(x=Num_Procedures_Total,y=Time_In_Hospital,color=Num_Medications,size=Number_Diagnoses,alpha=.00001)) + 
+  geom_smooth(data=numeric_grid,mapping=aes(x=Num_Procedures_Total,y=pred))+ 
+  xlab("Number of Total Procedures") + ylab("Time in Hospital(days)") + 
+  ggtitle("Time in Hospital Predictor")
+```
+
+  
+The results for this linear regression are quite interesting, the three variables that were most influential in the estimation of the time spent in the hospital are the number of procedures total, the number of medications, and the number of diagnoses. In the first 3 graphs regarding time spent in the hospital it is clear that all three of the variables of influence all have a weak positive correlation. However in our final model regarding time spent in the hospital we have included all three of these variables along with a line of prediction in the same visual. In this final model, the time spent in the hospital is represented by the y-axis, the number of procedures total is represented by the x-axis, the number of medications is represented by color (dark blue represents low numbers, while light blue represents high numbers), and the number of diagnoses are represented by the size of the points. Our data set contained such a large number of observations that even with a seemingly weak correlation between time in the hospital and the number of procedures total, the number of medications, and the number of diagnoses, there is little error margin for the prediction line. The little margin of error shows that though the line isn’t always spot on it is the best representation to predict the time in the hospital, given the data.
+  
+
+
+#### Q2: Can we construct a logistic regression model to predict the risk of getting readmitted using a combination of the variables in our data set?
+
+In our second question, we attempt to fit a model to predict whether a patient is readmitted by a hospital or not. Before entering the model construction process, we balanced our data set in three ways: adding weight, random under-sampling, and random oversampling. As the pie chart shows that about 91% of patients in our sample are not readmitted by the hospital, and only 8.6% of patients are readmitted, our data set is imbalanced. In our case, the not-readmitted class has a much bigger sample size than readmitted class, so when we first tried to fit a model, we have a high accuracy by predicting the not-readmitted class but fail to capture any of the readmitted class. Therefore, we decided to balance our dataset first, and then construct models.  
+
+```{r, echo=FALSE}
+p.NoReadmit = Hospital %>%
+  group_by(Readmitted)%>%
+  dplyr::summarize(count = n())%>%
+  mutate(percentage= count/57222)
+barplot(prop.table(table(Hospital$Readmitted)),
+        col = rainbow(2),
+        ylim = c(0, 1),
+        main = "Class Distribution",
+        xlab="Whether Readmitted Or Not")
+```
+
+First, we manually assigned different weights to the majority class (not-readmitted) and minority class(readmitted) by using the formula behind "class_weight = balanced," which is $$ n_samples / (n_classes * np.bincount(y))$$. The weight assigned to the not-readmitted class is about 0.547, and the weight assigned to the readmitted class is 5.793. Second, we used random under-sampling to reduce the number of observations from the not-readmitted class to make the data set balanced. The random under-sampling method randomly chooses observations from the not-readmitted class which are eliminated until the number of observations from the not-readmitted class is the same as the number of observations from readmitted class. Third, we used random over-sampling to replicates the observations from readmitted class to balance the data. Similar to the random under-sampling, this method randomly replicates the readmitted class until the number of observations from the readmitted class is the same as the number of observations from the not-readmitted class.  
+
+After we created 3 balanced datasets by using the three different methods, we separate the 3 datasets into 3 pairs of Train-Test sets. Since we have 17 potential predictors, we decided to use LASSO (Least Absolute Shrinkage and Selection Operator) regularization method to select the most useful and important variables for us to predict the binary response “whether readmitted or not.” LASSO offers a neat and easy way to model the response variable while automatically selecting significant variables by shrinking the coefficients of unimportant predictors to zero, so we do not need to check each variable’s p-value. Then, we applied LASSO regularized method to the 3 balanced datasets. The three models’ accuracy and f1 score are shown in the table below. 
+
+```{r,include=FALSE}
+not_readmitted = Hospital %>% filter(Readmitted == 'No')
+readmitted = Hospital %>% filter(Readmitted == 'Yes')
+```
+
+
+
+```{r,include=FALSE}
+Hospital.log = Hospital
+Hospital.log$Readmitted = ifelse(Hospital.log$Readmitted=="Yes",1,0)
+Hospital.log$Med_Change = ifelse(Hospital.log$Med_Change=="Yes",1,0)
+Hospital.log$Diabetes_Med_Prescribed = ifelse(Hospital.log$Diabetes_Med_Prescribed=="Yes",1,0)
+Hospital.log$Gender = ifelse(Hospital.log$Gender=="Female",1,0)
+
+
+set.seed(216)
+
+Hospital.log$split = sample(x=c("Train","Test"), size =57222, replace=T, prob=c(0.85,0.15))
+o.TRAIN.Hospital = Hospital.log%>%filter(split=="Train")
+o.TEST.Hospital = Hospital.log%>%filter(split=="Test")
+
+set.seed(216)
+o.HRmod.0=cv.glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18,19,20)]),alpha=0,
+                  family="binomial",type.measure="class")
+set.seed(216)
+o.HRmod.25=cv.glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18,19,20)]),alpha=0.25,
+                  family="binomial",type.measure="class")
+set.seed(216)
+o.HRmod.5=cv.glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18,19,20)]),alpha=0.5,
+                  family="binomial",type.measure="class")
+set.seed(216)
+o.HRmod.75=cv.glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18,19,20)]),alpha=0.75,
+                  family="binomial",type.measure="class")
+set.seed(216)
+o.HRmod.1=cv.glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18,19,20)]),alpha=1,
+                  family="binomial",type.measure="class")
+
+o.HR.0.ERROR=o.HRmod.0$cvm[which(o.HRmod.0$lambda==o.HRmod.0$lambda.1se)]
+o.HR.25.ERROR=o.HRmod.25$cvm[which(o.HRmod.25$lambda==o.HRmod.25$lambda.1se)]
+o.HR.5.ERROR=o.HRmod.5$cvm[which(o.HRmod.5$lambda==o.HRmod.5$lambda.1se)]
+o.HR.75.ERROR=o.HRmod.75$cvm[which(o.HRmod.75$lambda==o.HRmod.75$lambda.1se)]
+o.HR.1.ERROR=o.HRmod.1$cvm[which(o.HRmod.1$lambda==o.HRmod.1$lambda.1se)]
+
+o.MOD.RESULT=tibble(alpha=c(0,0.25,0.5,0.75,1),
+                  lambda=c(o.HRmod.0$lambda.1se,o.HRmod.25$lambda.1se,
+                           o.HRmod.5$lambda.1se,o.HRmod.75$lambda.1se,
+                           o.HRmod.1$lambda.1se),
+                  CV.Error=c(o.HR.0.ERROR,o.HR.25.ERROR,o.HR.5.ERROR,
+                             o.HR.75.ERROR,o.HR.1.ERROR))
+print(o.MOD.RESULT)
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+o.best.alpha=o.MOD.RESULT$alpha[which.min(o.MOD.RESULT$CV.Error)]
+o.best.lambda=o.MOD.RESULT$lambda[which.min(o.MOD.RESULT$CV.Error)]
+
+o.best.mod=glmnet(y=as.factor(o.TRAIN.Hospital$Readmitted),x=data.matrix(o.TRAIN.Hospital[,-c(1,18:20)]),
+                nlambda=1,lambda=o.best.lambda,alpha=o.best.alpha,
+                family="binomial")
+o.best.coef=as_tibble(as.matrix(coef(o.best.mod)))
+o.best.coef2=o.best.coef%>%
+  mutate(Parameter=c("Int",names(o.TRAIN.Hospital[,-c(1,18:20)]))) %>%
+  dplyr::rename(Estimate=s0)%>%
+  filter(Estimate!=0)%>%
+  select(Parameter, Estimate)
+print(o.best.coef2)
+```
+
+
+```{r,echo=FALSE,include=FALSE}
+o.TEST.Hospital1 = o.TEST.Hospital
+o.TEST.Hospital1$Predict=predict(o.best.mod,newx=data.matrix(o.TEST.Hospital1[,-c(1,18:20)]),type="response")
+o.TEST.Hospital1$Predict=ifelse(o.TEST.Hospital1$Predict>0.5,"Yes","No")
+o.TEST.Hospital1$Readmitted=ifelse(o.TEST.Hospital1$Readmitted==1,"Yes","No")
+o.confusion = table(o.TEST.Hospital1[,c("Readmitted","Predict")])
+o.confusion
+```
+
+```{r,include=FALSE}
+o.retrieved=0
+o.precision=0
+o.recall=0
+o.Fmeasure = 0
+o.Accuracy = (o.confusion[1,1])/nrow(o.TEST.Hospital1)
+o.Accuracy
+o.Fmeasure
+```
+
+
+```{r,include=FALSE}
+fraction_0 = nrow(Hospital) / (2* nrow(not_readmitted))
+fraction_1 =nrow(Hospital) / (2* nrow(readmitted))
+# assign that value to a "weights" vector
+Hospital_balanced = Hospital%>%
+mutate(Weights = ifelse(Readmitted == 'Yes', fraction_1, fraction_0))
+```
+
+
+```{r,include=FALSE}
+Hospital.logit = Hospital_balanced
+Hospital.logit$Readmitted = ifelse(Hospital.logit$Readmitted=="Yes",1,0)
+Hospital.logit$Med_Change = ifelse(Hospital.logit$Med_Change=="Yes",1,0)
+Hospital.logit$Diabetes_Med_Prescribed = ifelse(Hospital.logit$Diabetes_Med_Prescribed=="Yes",1,0)
+Hospital.logit$Gender = ifelse(Hospital.logit$Gender=="Female",1,0)
+```
+
+
+```{r,include=FALSE}
+set.seed(216)
+
+Hospital.logit$split = sample(x=c("Train","Test"), size =57222, replace=T, prob=c(0.85,0.15))
+TRAIN.Hospital = Hospital.logit%>%filter(split=="Train")
+TEST.Hospital = Hospital.logit%>%filter(split=="Test")
+```
+
+
+```{r,include=FALSE}
+set.seed(216)
+HRmod.0=cv.glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18,19,20,21)]),alpha=0,
+                  family="binomial",type.measure="class", weights = TRAIN.Hospital$Weights)
+set.seed(216)
+HRmod.25=cv.glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18,19,20,21)]),alpha=0.25,
+                  family="binomial",type.measure="class", weights = TRAIN.Hospital$Weights)
+set.seed(216)
+HRmod.5=cv.glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18,19,20,21)]),alpha=0.5,
+                  family="binomial",type.measure="class", weights = TRAIN.Hospital$Weights)
+set.seed(216)
+HRmod.75=cv.glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18,19,20,21)]),alpha=0.75,
+                  family="binomial",type.measure="class", weights = TRAIN.Hospital$Weights)
+set.seed(216)
+HRmod.1=cv.glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18,19,20,21)]),alpha=1,
+                  family="binomial",type.measure="class", weights = TRAIN.Hospital$Weights)
+```
+
+
+```{r,include=FALSE}
+HR.0.ERROR=HRmod.0$cvm[which(HRmod.0$lambda==HRmod.0$lambda.1se)]
+HR.25.ERROR=HRmod.25$cvm[which(HRmod.25$lambda==HRmod.25$lambda.1se)]
+HR.5.ERROR=HRmod.5$cvm[which(HRmod.5$lambda==HRmod.5$lambda.1se)]
+HR.75.ERROR=HRmod.75$cvm[which(HRmod.75$lambda==HRmod.75$lambda.1se)]
+HR.1.ERROR=HRmod.1$cvm[which(HRmod.1$lambda==HRmod.1$lambda.1se)]
+
+MOD.RESULT=tibble(alpha=c(0,0.25,0.5,0.75,1),
+                  lambda=c(HRmod.0$lambda.1se,HRmod.25$lambda.1se,
+                           HRmod.5$lambda.1se,HRmod.75$lambda.1se,
+                           HRmod.1$lambda.1se),
+                  CV.Error=c(HR.0.ERROR,HR.25.ERROR,HR.5.ERROR,
+                             HR.75.ERROR,HR.1.ERROR))
+print(MOD.RESULT)
+```
+
+
+```{r,include=FALSE}
+best.alpha=MOD.RESULT$alpha[which.min(MOD.RESULT$CV.Error)]
+best.lambda=MOD.RESULT$lambda[which.min(MOD.RESULT$CV.Error)]
+
+best.mod=glmnet(y=as.factor(TRAIN.Hospital$Readmitted),x=data.matrix(TRAIN.Hospital[,-c(1,18:21)]),
+                nlambda=1,lambda=best.lambda,alpha=best.alpha,
+                family="binomial", weights = TRAIN.Hospital$Weights)
+best.coef=as_tibble(as.matrix(coef(best.mod)))
+best.coef2=best.coef%>%
+  mutate(Parameter=c("Int",names(TRAIN.Hospital[,-c(1,18:21)]))) %>%
+  dplyr::rename(Estimate=s0)%>%
+  filter(Estimate!=0)%>%
+  select(Parameter,Estimate)
+print(best.coef2)
+```
+
+
+```{r,include=FALSE}
+TEST.Hospital1 = TEST.Hospital
+TEST.Hospital1$Predict=predict(best.mod,newx=data.matrix(TEST.Hospital1[,-c(1,18:21)]),type="response")
+TEST.Hospital1$Predict=ifelse(TEST.Hospital1$Predict>0.5,"Yes","No")
+TEST.Hospital1$Readmitted=ifelse(TEST.Hospital1$Readmitted==1,"Yes","No")
+confusion = table(TEST.Hospital1[,c("Readmitted","Predict")])
+confusion
+```
+
+```{r,include=FALSE}
+retrieved <- confusion[2,2]+confusion[1,2]
+precision <- confusion[2,2] / retrieved
+recall <- confusion[2,2] / (confusion[2,1]+confusion[2,2])
+Fmeasure <- (2 * precision * recall) / (precision + recall)
+Accuracy = (confusion[2,2]+confusion[1,1])/nrow(TEST.Hospital1)
+Accuracy
+Fmeasure
+```
+
+
+
+```{r,include=FALSE}
+library(caret)
+Hospital_down=downSample(data.matrix(Hospital[,-c(1, 19)]), as.factor(Hospital$Readmitted), list = FALSE, yname = "Class")
+Hospital_down.logit = Hospital_down
+set.seed(216)
+Hospital_down.logit$split = sample(x=c("Train","Test"), size =9878, replace=T, prob=c(0.85,0.15))
+TRAIN.Hospital_down = Hospital_down.logit%>%filter(split=="Train")
+TEST.Hospital_down = Hospital_down.logit%>%filter(split=="Test")
+```
+
+
+```{r,include=FALSE}
+set.seed(216)
+D.HRmod.0=cv.glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),alpha=0,
+                  family="binomial",type.measure="class")
+set.seed(216)
+D.HRmod.25=cv.glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),alpha=0.25,
+                  family="binomial",type.measure="class")
+set.seed(216)
+D.HRmod.5=cv.glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),alpha=0.5,
+                  family="binomial",type.measure="class")
+set.seed(216)
+D.HRmod.75=cv.glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),alpha=0.75,
+                  family="binomial",type.measure="class")
+set.seed(216)
+D.HRmod.1=cv.glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),alpha=1,
+                  family="binomial",type.measure="class")
+```
+
+
+```{r,include=FALSE}
+D.HR.0.ERROR=D.HRmod.0$cvm[which(D.HRmod.0$lambda==D.HRmod.0$lambda.1se)]
+D.HR.25.ERROR=D.HRmod.25$cvm[which(D.HRmod.25$lambda==D.HRmod.25$lambda.1se)]
+D.HR.5.ERROR=D.HRmod.5$cvm[which(D.HRmod.5$lambda==D.HRmod.5$lambda.1se)]
+D.HR.75.ERROR=D.HRmod.75$cvm[which(D.HRmod.75$lambda==D.HRmod.75$lambda.1se)]
+D.HR.1.ERROR=D.HRmod.1$cvm[which(D.HRmod.1$lambda==D.HRmod.1$lambda.1se)]
+
+D.MOD.RESULT=tibble(alpha=c(0,0.25,0.5,0.75,1),
+                  lambda=c(D.HRmod.0$lambda.1se,D.HRmod.25$lambda.1se,
+                           D.HRmod.5$lambda.1se,D.HRmod.75$lambda.1se,
+                           D.HRmod.1$lambda.1se),
+                  CV.Error=c(D.HR.0.ERROR,D.HR.25.ERROR,D.HR.5.ERROR,
+                             D.HR.75.ERROR,D.HR.1.ERROR))
+print(D.MOD.RESULT)
+```
+
+
+```{r,include=FALSE}
+D.best.alpha=D.MOD.RESULT$alpha[which.min(D.MOD.RESULT$CV.Error)]
+D.best.lambda=D.MOD.RESULT$lambda[which.min(D.MOD.RESULT$CV.Error)]
+
+D.best.mod=glmnet(y=as.factor(TRAIN.Hospital_down$Readmitted),x=data.matrix(TRAIN.Hospital_down[,-c(17,18)]),
+                nlambda=1,lambda=D.best.lambda,alpha=D.best.alpha,
+                family="binomial")
+D.best.coef=as_tibble(as.matrix(coef(D.best.mod)))
+D.best.coef2=D.best.coef%>%
+  mutate(Parameter=c("Int",names(TRAIN.Hospital_down[,-c(17,18)]))) %>%
+  dplyr::rename(Estimate=s0)%>%
+  filter(Estimate!=0)%>%
+  select(Parameter,Estimate)
+print(D.best.coef2)
+```
+
+
+```{r,include=FALSE}
+TEST.Hospital_down1 = TEST.Hospital_down
+TEST.Hospital_down1$Predict=predict(D.best.mod,newx=data.matrix(TEST.Hospital_down1[,-c(17,18)]),type="response")
+TEST.Hospital_down1$Predict=ifelse(TEST.Hospital_down1$Predict>0.5,"Yes","No")
+TEST.Hospital_down1$Readmitted=ifelse(TEST.Hospital_down1$Readmitted==1,"Yes","No")
+D.confusion = table(TEST.Hospital_down1[,c("Readmitted","Predict")])
+D.confusion
+```
+
+
+```{r,include=FALSE}
+D.retrieved <- D.confusion[2,2]+D.confusion[1,2]
+D.precision <- D.confusion[2,2] / D.retrieved
+D.recall <- D.confusion[2,2] /( D.confusion[2,1]+D.confusion[2,2])
+D.Fmeasure <- (2 * D.precision * D.recall) / (D.precision + D.recall)
+D.Accuracy = (D.confusion[2,2]+D.confusion[1,1])/nrow(TEST.Hospital_down1)
+D.Accuracy
+D.Fmeasure
+```
+
+```{r,include=FALSE}
+Hospital_Up=upSample(data.matrix(Hospital[,-c(1, 19)]), as.factor(Hospital$Readmitted), list = FALSE, yname = "Class")
+Hospital_Up.logit = Hospital_Up
+set.seed(216)
+Hospital_Up.logit$split = sample(x=c("Train","Test"), size =104566, replace=T, prob=c(0.85,0.15))
+TRAIN.Hospital_Up = Hospital_Up.logit%>%filter(split=="Train")
+TEST.Hospital_Up = Hospital_Up.logit%>%filter(split=="Test")
+```
+
+
+```{r,include=FALSE}
+set.seed(216)
+U.HRmod.0=cv.glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),alpha=0,
+                  family="binomial",type.measure="class")
+set.seed(216)
+U.HRmod.25=cv.glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),alpha=0.25,
+                  family="binomial",type.measure="class")
+set.seed(216)
+U.HRmod.5=cv.glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),alpha=0.5,
+                  family="binomial",type.measure="class")
+set.seed(216)
+U.HRmod.75=cv.glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),alpha=0.75,
+                  family="binomial",type.measure="class")
+set.seed(216)
+U.HRmod.1=cv.glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),alpha=1,
+                  family="binomial",type.measure="class")
+```
+
+```{r,include=FALSE}
+U.HR.0.ERROR=U.HRmod.0$cvm[which(U.HRmod.0$lambda==U.HRmod.0$lambda.1se)]
+U.HR.25.ERROR=U.HRmod.25$cvm[which(U.HRmod.25$lambda==U.HRmod.25$lambda.1se)]
+U.HR.5.ERROR=U.HRmod.5$cvm[which(U.HRmod.5$lambda==U.HRmod.5$lambda.1se)]
+U.HR.75.ERROR=U.HRmod.75$cvm[which(U.HRmod.75$lambda==U.HRmod.75$lambda.1se)]
+U.HR.1.ERROR=U.HRmod.1$cvm[which(U.HRmod.1$lambda==U.HRmod.1$lambda.1se)]
+
+U.MOD.RESULT=tibble(alpha=c(0,0.25,0.5,0.75,1),
+                  lambda=c(U.HRmod.0$lambda.1se,U.HRmod.25$lambda.1se,
+                           U.HRmod.5$lambda.1se,U.HRmod.75$lambda.1se,
+                           U.HRmod.1$lambda.1se),
+                  CV.Error=c(U.HR.0.ERROR,U.HR.25.ERROR,U.HR.5.ERROR,
+                             U.HR.75.ERROR,U.HR.1.ERROR))
+print(U.MOD.RESULT)
+```
+
+
+```{r,include=FALSE}
+U.best.alpha=U.MOD.RESULT$alpha[which.min(U.MOD.RESULT$CV.Error)]
+U.best.lambda=U.MOD.RESULT$lambda[which.min(U.MOD.RESULT$CV.Error)]
+
+U.best.mod=glmnet(y=as.factor(TRAIN.Hospital_Up$Readmitted),x=data.matrix(TRAIN.Hospital_Up[,-c(17,18)]),
+                nlambda=1,lambda=U.best.lambda,alpha=U.best.alpha,
+                family="binomial")
+U.best.coef=as_tibble(as.matrix(coef(U.best.mod)))
+U.best.coef2=U.best.coef%>%
+  mutate(Parameter=c("Int",names(TRAIN.Hospital_Up[,-c(17,18)]))) %>%
+  dplyr::rename(Estimate=s0)%>%
+  filter(Estimate!=0)%>%
+  select(Parameter,Estimate)
+print(U.best.coef2)
+```
+
+
+```{r,include=FALSE}
+TEST.Hospital_Up1 = TEST.Hospital_Up
+TEST.Hospital_Up1$Predict=predict(U.best.mod,newx=data.matrix(TEST.Hospital_Up1[,-c(17,18)]),type="response")
+TEST.Hospital_Up1$Predict=ifelse(TEST.Hospital_Up1$Predict>0.5,"Yes","No")
+TEST.Hospital_Up1$Readmitted=ifelse(TEST.Hospital_Up1$Readmitted==1,"Yes","No")
+U.confusion = table(TEST.Hospital_Up1[,c("Readmitted","Predict")])
+U.confusion
+```
+
+```{r,include=FALSE}
+U.retrieved <- U.confusion[2,2]+U.confusion[1,2]
+U.precision <- U.confusion[2,2] / U.retrieved
+U.recall <- U.confusion[2,2] /(U.confusion[2,1]+U.confusion[2,2])
+U.Fmeasure <- (2 * U.precision * U.recall) / (U.precision + U.recall)
+U.Accuracy = (U.confusion[2,2]+U.confusion[1,1])/nrow(TEST.Hospital_Up1)
+U.Accuracy
+U.Fmeasure
+```
+
+```{r, echo=FALSE}
+summary=data.frame("Balance Method"=c("Unbalanced","Weight","Under-sampling", "Over-sampling"),"Model" = c("Model_Unbalanced","Model_Weighted","Model_Under","Model_Over"),"Accuracy" = c(o.Accuracy
+,Accuracy, D.Accuracy,U.Accuracy), "F-measure" = c(o.Fmeasure,Fmeasure, D.Fmeasure,U.Fmeasure))
+summary %>%
+  kbl() %>%
+  kable_styling()
+```
+
+F-measure is the harmonic mean of precision and recall, which balanced both the concerns of precision and recall in one number. $$ F-Measure = (2 * Precision * Recall) / (Precision + Recall) $$ In our case, to find the best model fitted our imbalanced data and capture the readmitted class(minority), we should not only consider the accuracy but also the F-measure of the model. As the results shown in the previous table, the model created in the dataset balanced by assigned weight is the most reasonable choice. Although the accuracy decreases compared to the model created by unbalanced data, it improves F-measure by 20 %. Also, the Under-sampling model has the Highest F-measure, but the accuracy is too low to make any meaningful inference. Therefore, we select Model_Weighted as our final model. The graph below visualized the confusion table of our final model, and the table lists all predictor and their coefficient. 
+
+```{r, echo=FALSE}
+ggplot(TEST.Hospital1) +
+  geom_count(mapping = aes(Predict, Readmitted), col="coral") +
+  scale_size_area(max_size = 30)
+```
+
+```{r, echo=FALSE}
+best.coef2 %>%
+  kbl() %>%
+  kable_minimal()
+```
+
+As our final model's coefficient table shows, all 16 variables in the data are useful and important. The LASSO method does not rule out any variable, so we can make a conclusion that whether patients are readmitted by hospitals or not is influenced by all 16 variables shown in the above table. Among them, Discharge_Disposition has the biggest absolute coefficient value, which means it has the strongest relationship with whether the patient is readmitted or not. 
+
+
+# CONCLUSION
+
+The goal of our first question was to predict the length of stay in hospital (`Time_In_Hospital`). Our key finding is that `Num_Medications`, `Num_Procedures_Total`, and `Number_Diagnoses` all have a positive correlation with `Time_In_Hospital`. We arrived at this conclusion by first constructing a linear regression model for each of the predictor variables to get a vague idea of the variable’s association/correlation in regard to `Time_In_Hospital`. Then we started to weed out the non-influential variables by calculating the mean absolute error for each combination of variables. We also used Adjusted-R-squared to help us narrow it down even more. It’s not surprising to us that the three best predictor variables were `Num_Medications`, `Num_Procedures_Total`, and `Number_Diagnoses`. All three of these variables had the highest R-squared value, lowest mean absolute error value, and p-values that made them significant. It’s quite surprising that adding categorical variables to our model did not greatly improve our prediction accuracy.
+
+The goal of our second question was to predict whether a patient will get readmitted (`Readmitted`). Since only 10% of the total patients got readmitted to the hospital, we first need to balance our dataset before performing any analysis. We applied three balancing techniques, including weight assignment, under-sampling, and oversampling. After balancing our highly skewed dataset and applying LASSO regression, we compared the four models in the test dataset and identified the best model, which is constructed using weight assignment. It’s quite surprising that the LASSO returned all variables in the dataset as significant. In our best model, we included all the 16 variables in our dataset and reached a 60% predicting accuracy.
+
+These results are especially relevant in the real world considering hospital readmission and length of stay in hospitals are two important health care quality measurements and drivers of costs. The risk variables that we identified for readmission and longer length of stay can be beneficial to both hospital administrative staff and physicians. knowing the 3 risk variable for longer length of stay, hospital managers can develop a better capacity planning early into a patient’s treatment. After knowing the number of total procedures, the number of medications, and the number of diagnoses, supply chain specialists can foresee any bottlenecks in resource availability and hospital capacity in the future to avoid unnecessary resource shortages. The 16 risk factors that contribute to hospital readmission require a mix of potential strategies for reducing readmission risks, such as inpatient education, specialty care, better discharge instructions, coordination of care, and post-discharge support. Particularly, for patients with diabetes, diabetes-specific strategies such as diabetes education, intensifying therapy, and outpatient diabetes care can be deployed accordingly to further reduce readmission risks.
+
+While the dataset was comprehensive, we think certain additions or changes can help us construct a more robust analysis. Given the complexity of the hospital readmission problem and our logistic regression model’s 60% accuracy, it’s likely that variables not collected in this dataset are significant in predicting whether a patient gets readmitted. We felt that Factors like one’s socio-economic status, level of social support (living alone or not), geographical location all have the potential to affect hospital readmission. Therefore, future studies on hospital readmission should try to collect more features and look into the factors that are not discussed in our paper. Another potential improvement is to complete a grid search when assigning weight to the logistic regression model. In our analysis, we balanced our dataset by assigning a weight of 10 to the smaller sample and 1 to the larger sample. There are many other ways to balance an unbalanced dataset, so in future studies, one can use grid search to determine the optimal weight assignment that can reach a better overall accuracy and f score. Last but not least, adding interaction terms is also a good starting point for future research. In our analysis, we performed a preliminary LASSO regression using all the variables and their interaction terms to fit the model, but we ended up getting more than 800 significant predictor variables in our model. We didn’t continue working on modeling with interaction terms, but more modeling techniques could be applied to potentially reduce the number of significant predictor variables and reach a better prediction performance.
+
+#### The slide presentation of this paper can be accessed [here](https://docs.google.com/presentation/d/1CK4aKZ5hpU-ekDBN9ot0eEf40-gGhY-snpym0BbCCTY/edit#slide=id.p)
